@@ -10,147 +10,134 @@ permissions:
 
 jobs:
   windows-x64:
-    name: Windows x64 EXE
-    runs-on: windows-2022
+    name: Windows x64 EXE (official MinGW path)
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout builder repo
         uses: actions/checkout@v6
 
       - name: Decode mod bundle
-        shell: pwsh
         run: |
-          $b64 = Get-Content mod/stk_rocket_soccer_mod.zip.b64 -Raw
-          [IO.File]::WriteAllBytes("stk_rocket_soccer_mod.zip", [Convert]::FromBase64String($b64))
-          Expand-Archive stk_rocket_soccer_mod.zip -DestinationPath mod-unpacked -Force
+          base64 -d mod/stk_rocket_soccer_mod.zip.b64 > stk_rocket_soccer_mod.zip
+          unzip -q stk_rocket_soccer_mod.zip -d mod-unpacked
 
       - name: Clone pinned SuperTuxKart
-        shell: bash
         run: |
           git clone https://github.com/supertuxkart/stk-code.git
           cd stk-code
           git checkout c6b127792e8ecdf82c28fdd9c8023cffb7084dc0
 
       - name: Apply Rocket Soccer patch
-        shell: pwsh
         run: |
-          python mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code --check
-          python mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code
-          $path = "stk-code/src/modes/soccer_world.cpp"
-          $text = Get-Content $path -Raw
-          if ($text -notmatch '#include <ISceneManager.h>') {
-            $text = $text.Replace('#include <IMeshSceneNode.h>', "#include <IMeshSceneNode.h>`n#include <ISceneManager.h>")
-            Set-Content -Path $path -Value $text -NoNewline
-          }
+          python3 mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code --check
+          python3 mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('stk-code/src/modes/soccer_world.cpp')
+          s = p.read_text()
+          if '#include <ISceneManager.h>' not in s:
+              s = s.replace('#include <IMeshSceneNode.h>', '#include <IMeshSceneNode.h>\n#include <ISceneManager.h>')
+              p.write_text(s)
+          PY
 
-      - name: Download Windows dependencies
-        shell: bash
+      - name: Download STK Windows dependencies
         working-directory: stk-code
         run: |
           curl -L --fail -o dependencies-win-x86_64.zip https://github.com/supertuxkart/dependencies/releases/download/preview/dependencies-win-x86_64.zip
           unzip -q dependencies-win-x86_64.zip
 
-      - name: Download matching LLVM runtime
-        shell: bash
+      - name: Install official MXE MinGW toolchain
         run: |
-          curl -L --fail -o llvm-mingw.tar.xz https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-msvcrt-ubuntu-22.04-x86_64.tar.xz
-          mkdir -p llvm-mingw-runtime
-          tar -xJf llvm-mingw.tar.xz -C llvm-mingw-runtime
-          find llvm-mingw-runtime -type f \( -name 'libc++.dll' -o -name 'libunwind.dll' -o -name 'libc++abi.dll' \) -print
+          sudo mkdir -p /data/mxe/usr
+          cd /data/mxe/usr
+          sudo curl -L --fail -o mxe_static_mingw.zip https://github.com/supertuxkart/dependencies/releases/download/preview/mxe_static_mingw.zip
+          sudo unzip -q mxe_static_mingw.zip
+          sudo rm mxe_static_mingw.zip
+          sudo apt-get update
+          sudo apt-get install -y libfl-dev
 
-      - name: Download Windows game assets
-        shell: bash
+      - name: Install ISPC used by official STK Windows workflow
         run: |
-          mkdir -p stk-assets-win
-          curl -L --fail -o stk-assets.zip https://github.com/supertuxkart/stk-assets-mobile/releases/download/git/stk-assets.zip
-          unzip -q stk-assets.zip -d stk-assets-win
-          test -d stk-assets-win/tracks
-          test -d stk-assets-win/karts
+          sudo mkdir -p /opt/ispc
+          curl -L --fail -o ispc-cross.tar.xz https://github.com/supertuxkart/dependencies/releases/download/preview/ispc-cross-1.26.0.tar.xz
+          sudo tar -xJf ispc-cross.tar.xz -C /opt
+          test -x /opt/ispc/bin/ispc
 
-      - name: Configure MSVC x64
-        shell: pwsh
+      - name: Create x86_64 MinGW CMake toolchain
         working-directory: stk-code
         run: |
-          New-Item -ItemType Directory -Force build | Out-Null
+          cat > toolchain.cmake <<'EOF'
+          SET(CMAKE_SYSTEM_NAME Windows)
+          SET(CMAKE_C_COMPILER /data/mxe/usr/bin/x86_64-w64-mingw32.static.posix.seh-gcc)
+          SET(CMAKE_CXX_COMPILER /data/mxe/usr/bin/x86_64-w64-mingw32.static.posix.seh-g++)
+          SET(CMAKE_RC_COMPILER /data/mxe/usr/bin/x86_64-w64-mingw32.static.posix.seh-windres)
+          SET(CMAKE_FIND_ROOT_PATH ${PROJECT_SOURCE_DIR}/dependencies-win-x86_64 /data/mxe/usr/x86_64-w64-mingw32.static.posix.seh/ /data/mxe/usr/lib/gcc/x86_64-w64-mingw32.static.posix.seh/5.5.0/)
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ALWAYS)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+          set(ISPC_ARCH "x86-64")
+          EOF
+
+      - name: Configure MinGW x86_64
+        working-directory: stk-code
+        run: |
+          mkdir -p build
           cd build
-          cmake .. -G "Visual Studio 17 2022" -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=x86_64 -A x64 -DCHECK_ASSETS=OFF
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE=../toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCHECK_ASSETS=OFF \
+            -DUSE_DIRECTX=ON \
+            -DBC7_ISPC=ON \
+            -DCMAKE_ISPC_COMPILER=/opt/ispc/bin/ispc
 
-      - name: Build EXE
-        shell: pwsh
+      - name: Build Windows EXE
         working-directory: stk-code/build
-        run: cmake --build . --config Release --parallel 4
+        run: make -j4
 
-      - name: Collect portable Windows build
-        shell: pwsh
+      - name: Verify MinGW runtime folder
         run: |
-          Remove-Item artifact-windows -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force artifact-windows | Out-Null
+          test -f stk-code/build/bin/supertuxkart.exe
+          echo "Windows runtime files:"
+          ls -lah stk-code/build/bin
+          file stk-code/build/bin/supertuxkart.exe
+          if [ -f stk-code/build/bin/OpenAL32.dll ]; then
+            file stk-code/build/bin/OpenAL32.dll
+          fi
 
-          $exe = Get-ChildItem stk-code/build -Recurse -File -Filter supertuxkart.exe |
-            Where-Object { $_.FullName -match '[\\/]bin[\\/]Release[\\/]supertuxkart\.exe$' } |
-            Select-Object -First 1
-          if (-not $exe) {
-            $exe = Get-ChildItem stk-code/build -Recurse -File -Filter supertuxkart.exe | Select-Object -First 1
-          }
-          if (-not $exe) { throw "supertuxkart.exe not found" }
-
-          $runtime = $exe.Directory.FullName
-          Write-Host "Runtime directory: $runtime"
-          Copy-Item "$runtime\*" artifact-windows -Recurse -Force
-
-          foreach ($name in @('libc++.dll', 'libunwind.dll', 'libc++abi.dll')) {
-            $dll = Get-ChildItem llvm-mingw-runtime -Recurse -File -Filter $name |
-              Where-Object { $_.FullName -match 'x86_64-w64-mingw32' } |
-              Select-Object -First 1
-            if ($dll) {
-              Write-Host "Adding LLVM runtime: $($dll.FullName)"
-              Copy-Item $dll.FullName "artifact-windows\$name" -Force
-            }
-          }
-
-          if (!(Test-Path 'artifact-windows\libc++.dll')) {
-            throw "Matching libc++.dll was not found in LLVM-MinGW runtime"
-          }
-
-          Copy-Item stk-code/data artifact-windows/data -Recurse -Force
-          Copy-Item 'stk-assets-win\*' artifact-windows/data -Recurse -Force
-
-          if (!(Test-Path 'artifact-windows\data\supertuxkart.git')) {
-            throw "STK data version marker missing"
-          }
-          if (!(Test-Path 'artifact-windows\data\tracks')) {
-            throw "Track assets missing"
-          }
-          if (!(Test-Path 'artifact-windows\data\karts')) {
-            throw "Kart assets missing"
-          }
-
-          @"
-          STK Rocket Soccer - Windows x64 portable build
-
-          Run: supertuxkart.exe
-          Keep the EXE, DLL files and data folder together.
-          This build includes the Rocket Soccer C++ modifications and the matching LLVM runtime used by STK's dependency DLLs.
-          "@ | Set-Content artifact-windows/README-RUN.txt
-
-          Write-Host "Portable package top-level files:"
-          Get-ChildItem artifact-windows | Select-Object Name, Length
-
-      - name: Validate Windows runtime dependencies
-        shell: pwsh
+      - name: Download Windows assets
         run: |
-          foreach ($name in @('supertuxkart.exe','OpenAL32.dll','libastcenc.dll','libc++.dll')) {
-            if (!(Test-Path "artifact-windows\$name")) { throw "$name missing from portable package" }
-          }
-          Write-Host "OpenAL dependencies:"
-          dumpbin /DEPENDENTS artifact-windows/OpenAL32.dll
-          Write-Host "libastcenc dependencies:"
-          dumpbin /DEPENDENTS artifact-windows/libastcenc.dll
+          mkdir -p stk-assets
+          curl -L --fail -o stk-assets-full.zip https://github.com/supertuxkart/stk-assets-mobile/releases/download/git/stk-assets-full.zip
+          unzip -q stk-assets-full.zip -d stk-assets
+          test -d stk-assets/tracks
+          test -d stk-assets/karts
+
+      - name: Package like official STK Windows release
+        run: |
+          ROOT="STK-Rocket-Soccer-Windows-x64"
+          mkdir -p "$ROOT/stk-code/build-x86_64"
+          cp -a stk-code/build/bin "$ROOT/stk-code/build-x86_64/bin"
+          cp -a stk-code/data "$ROOT/stk-code/data"
+          cp -a stk-assets "$ROOT/stk-assets"
+          cp stk-code/tools/run_game.bat "$ROOT/run_game.bat"
+          cp stk-code/COPYING "$ROOT/COPYING" || true
+          cat > "$ROOT/README-RUN.txt" <<'EOF'
+          STK Rocket Soccer - Windows x64
+
+          Start the game with run_game.bat.
+          This package follows SuperTuxKart's official Windows folder layout and uses the same MXE/MinGW x86_64 toolchain path as the official GitHub Actions workflow.
+          Keep the entire folder together.
+          EOF
+          test -f "$ROOT/stk-code/build-x86_64/bin/supertuxkart.exe"
+          test -d "$ROOT/stk-code/data"
+          test -d "$ROOT/stk-assets/tracks"
 
       - name: Upload Windows portable build
         uses: actions/upload-artifact@v7
         with:
-          name: STK-Rocket-Soccer-Windows-x64-Portable
-          path: artifact-windows/
+          name: STK-Rocket-Soccer-Windows-x64-MinGW
+          path: STK-Rocket-Soccer-Windows-x64/
           if-no-files-found: error
           compression-level: 6
 
