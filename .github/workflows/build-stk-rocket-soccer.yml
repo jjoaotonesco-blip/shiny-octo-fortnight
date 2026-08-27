@@ -156,7 +156,7 @@ jobs:
       - name: Collect APK
         run: |
           mkdir -p artifact-android
-          find stk-code/android/build/outputs/apk -type f -name '*.apk' -print -exec cp {} artifact-android/STK-Rocket-Soccer-arm64-debug.apk \;
+          cp stk-code/android/build/outputs/apk/android-debug.apk artifact-android/STK-Rocket-Soccer-arm64-debug.apk
           test -f artifact-android/STK-Rocket-Soccer-arm64-debug.apk
 
       - name: Upload Android APK
