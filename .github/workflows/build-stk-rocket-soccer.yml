@@ -1,0 +1,167 @@
+name: Build STK Rocket Soccer
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    name: Windows x64 EXE
+    runs-on: windows-2022
+    steps:
+      - name: Checkout builder repo
+        uses: actions/checkout@v6
+
+      - name: Decode mod bundle
+        shell: pwsh
+        run: |
+          $b64 = Get-Content mod/stk_rocket_soccer_mod.zip.b64 -Raw
+          [IO.File]::WriteAllBytes("stk_rocket_soccer_mod.zip", [Convert]::FromBase64String($b64))
+          Expand-Archive stk_rocket_soccer_mod.zip -DestinationPath mod-unpacked -Force
+
+      - name: Clone pinned SuperTuxKart
+        shell: bash
+        run: |
+          git clone https://github.com/supertuxkart/stk-code.git
+          cd stk-code
+          git checkout c6b127792e8ecdf82c28fdd9c8023cffb7084dc0
+
+      - name: Apply Rocket Soccer patch
+        shell: pwsh
+        run: |
+          python mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code --check
+          python mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code
+
+      - name: Download Windows dependencies
+        shell: bash
+        working-directory: stk-code
+        run: |
+          curl -L --fail -o dependencies-win-x86_64.zip https://github.com/supertuxkart/dependencies/releases/download/preview/dependencies-win-x86_64.zip
+          unzip -q dependencies-win-x86_64.zip
+
+      - name: Configure MSVC x64
+        shell: pwsh
+        working-directory: stk-code
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          cd build
+          cmake .. -G "Visual Studio 17 2022" -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=x86_64 -A x64 -DCHECK_ASSETS=OFF
+
+      - name: Build EXE
+        shell: pwsh
+        working-directory: stk-code/build
+        run: cmake --build . --config Release --parallel 4
+
+      - name: Collect Windows build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifact-windows | Out-Null
+          Get-ChildItem stk-code/build -Recurse -Filter supertuxkart.exe | ForEach-Object { Copy-Item $_.FullName artifact-windows/supertuxkart.exe -Force }
+          Get-ChildItem stk-code/build -Recurse -Filter *.dll | ForEach-Object { Copy-Item $_.FullName artifact-windows/ -Force }
+          if (!(Test-Path artifact-windows/supertuxkart.exe)) { throw "supertuxkart.exe not found" }
+
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v7
+        with:
+          name: STK-Rocket-Soccer-Windows-x64
+          path: artifact-windows/
+          if-no-files-found: error
+
+  android-arm64:
+    name: Android ARM64 APK
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout builder repo
+        uses: actions/checkout@v6
+
+      - name: Decode mod bundle
+        run: |
+          base64 -d mod/stk_rocket_soccer_mod.zip.b64 > stk_rocket_soccer_mod.zip
+          unzip -q stk_rocket_soccer_mod.zip -d mod-unpacked
+
+      - name: Clone pinned SuperTuxKart
+        run: |
+          git clone https://github.com/supertuxkart/stk-code.git
+          cd stk-code
+          git checkout c6b127792e8ecdf82c28fdd9c8023cffb7084dc0
+
+      - name: Apply Rocket Soccer patch
+        run: |
+          python3 mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code --check
+          python3 mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code
+
+      - name: Install Android build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake make python3 python3-pip flex bison imagemagick cmake meson vorbis-tools pngquant advancecomp libjpeg-progs optipng ninja-build pkg-config zip unzip
+          python3 -m pip install --break-system-packages packaging mako
+
+      - name: Install Android SDK/NDK pieces
+        shell: bash
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;28.1.13356709"
+
+      - name: Download Android dependency sources
+        working-directory: stk-code
+        run: |
+          curl -L --fail -o dependencies-android-src.tar.xz https://github.com/supertuxkart/dependencies/releases/download/preview/dependencies-android-src.tar.xz
+          tar -xJf dependencies-android-src.tar.xz -C lib
+
+      - name: Download mobile assets
+        run: |
+          mkdir -p stk-assets
+          curl -L --fail -o stk-assets-full.zip https://github.com/supertuxkart/stk-assets-mobile/releases/download/git/stk-assets-full.zip
+          unzip -q stk-assets-full.zip -d stk-assets
+          test -d stk-assets/tracks
+
+      - name: Generate Android assets
+        working-directory: stk-code/android
+        env:
+          ASSETS_PATHS: ${{ github.workspace }}/stk-assets
+          DECREASE_QUALITY: "1"
+          COMPILE_ARCH: aarch64
+          BUILD_TYPE: debug
+          PROJECT_VERSION: git
+        run: ./generate_assets.sh
+
+      - name: Build Android dependencies
+        working-directory: stk-code/android
+        env:
+          SDK_PATH: ${{ env.ANDROID_HOME }}
+          NDK_PATH: ${{ env.ANDROID_HOME }}/ndk
+          STK_NDK_VERSION: 28.1.13356709
+          STK_TARGET_ANDROID_SDK: 35
+          COMPILE_ARCH: aarch64
+          BUILD_TYPE: debug
+          PROJECT_VERSION: git
+        run: ./make_deps.sh
+
+      - name: Build APK
+        working-directory: stk-code/android
+        env:
+          SDK_PATH: ${{ env.ANDROID_HOME }}
+          NDK_PATH: ${{ env.ANDROID_HOME }}/ndk
+          STK_NDK_VERSION: 28.1.13356709
+          STK_TARGET_ANDROID_SDK: 35
+          COMPILE_ARCH: aarch64
+          BUILD_TYPE: debug
+          PROJECT_VERSION: git
+        run: ./make.sh -j4
+
+      - name: Collect APK
+        run: |
+          mkdir -p artifact-android
+          find stk-code/android/build/outputs/apk -type f -name '*.apk' -print -exec cp {} artifact-android/STK-Rocket-Soccer-arm64-debug.apk \;
+          test -f artifact-android/STK-Rocket-Soccer-arm64-debug.apk
+
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: STK-Rocket-Soccer-Android-arm64
+          path: artifact-android/STK-Rocket-Soccer-arm64-debug.apk
+          if-no-files-found: error
