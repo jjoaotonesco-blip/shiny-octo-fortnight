@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   windows-x64:
+    if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[android-only]') }}
     name: Windows x64 EXE (official MinGW path)
     runs-on: ubuntu-24.04
     steps:
@@ -232,19 +233,24 @@ jobs:
           PROJECT_VERSION: git
         run: ./make.sh -j4
 
-      - name: Collect APK
+      - name: Collect and validate APK
         shell: bash
         run: |
           mkdir -p artifact-android
-          APK="$(find stk-code/android/build/outputs/apk -type f -name '*.apk' | head -n 1)"
+          echo "APK candidates produced by the build:"
+          find stk-code -type f -name '*.apk' -print || true
+          APK="$(find stk-code -type f -name '*.apk' | grep -Ei 'debug.*\.apk$' | head -n 1 || true)"
           if [ -z "$APK" ]; then
-            echo "No APK found. Available output files:"
-            find stk-code/android/build/outputs -maxdepth 5 -type f -print || true
+            APK="$(find stk-code -type f -name '*.apk' | head -n 1)"
+          fi
+          if [ -z "$APK" ]; then
+            echo "No APK found anywhere under stk-code"
             exit 1
           fi
           echo "Found APK: $APK"
           cp "$APK" artifact-android/STK-Rocket-Soccer-arm64-debug.apk
           test -f artifact-android/STK-Rocket-Soccer-arm64-debug.apk
+          unzip -t artifact-android/STK-Rocket-Soccer-arm64-debug.apk
 
       - name: Upload Android APK
         uses: actions/upload-artifact@v7
