@@ -49,6 +49,23 @@ jobs:
           curl -L --fail -o dependencies-win-x86_64.zip https://github.com/supertuxkart/dependencies/releases/download/preview/dependencies-win-x86_64.zip
           unzip -q dependencies-win-x86_64.zip
 
+      - name: Download matching LLVM runtime
+        shell: bash
+        run: |
+          curl -L --fail -o llvm-mingw.tar.xz https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-msvcrt-ubuntu-22.04-x86_64.tar.xz
+          mkdir -p llvm-mingw-runtime
+          tar -xJf llvm-mingw.tar.xz -C llvm-mingw-runtime
+          find llvm-mingw-runtime -type f \( -name 'libc++.dll' -o -name 'libunwind.dll' -o -name 'libc++abi.dll' \) -print
+
+      - name: Download Windows game assets
+        shell: bash
+        run: |
+          mkdir -p stk-assets-win
+          curl -L --fail -o stk-assets.zip https://github.com/supertuxkart/stk-assets-mobile/releases/download/git/stk-assets.zip
+          unzip -q stk-assets.zip -d stk-assets-win
+          test -d stk-assets-win/tracks
+          test -d stk-assets-win/karts
+
       - name: Configure MSVC x64
         shell: pwsh
         working-directory: stk-code
@@ -62,22 +79,83 @@ jobs:
         working-directory: stk-code/build
         run: cmake --build . --config Release --parallel 4
 
-      - name: Collect Windows build
+      - name: Collect portable Windows build
         shell: pwsh
         run: |
+          Remove-Item artifact-windows -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force artifact-windows | Out-Null
-          Get-ChildItem stk-code/build -Recurse -Filter supertuxkart.exe | ForEach-Object { Copy-Item $_.FullName artifact-windows/supertuxkart.exe -Force }
-          Get-ChildItem stk-code/build -Recurse -Filter *.dll | ForEach-Object { Copy-Item $_.FullName artifact-windows/ -Force }
-          if (!(Test-Path artifact-windows/supertuxkart.exe)) { throw "supertuxkart.exe not found" }
 
-      - name: Upload Windows EXE
+          $exe = Get-ChildItem stk-code/build -Recurse -File -Filter supertuxkart.exe |
+            Where-Object { $_.FullName -match '[\\/]bin[\\/]Release[\\/]supertuxkart\.exe$' } |
+            Select-Object -First 1
+          if (-not $exe) {
+            $exe = Get-ChildItem stk-code/build -Recurse -File -Filter supertuxkart.exe | Select-Object -First 1
+          }
+          if (-not $exe) { throw "supertuxkart.exe not found" }
+
+          $runtime = $exe.Directory.FullName
+          Write-Host "Runtime directory: $runtime"
+          Copy-Item "$runtime\*" artifact-windows -Recurse -Force
+
+          foreach ($name in @('libc++.dll', 'libunwind.dll', 'libc++abi.dll')) {
+            $dll = Get-ChildItem llvm-mingw-runtime -Recurse -File -Filter $name |
+              Where-Object { $_.FullName -match 'x86_64-w64-mingw32' } |
+              Select-Object -First 1
+            if ($dll) {
+              Write-Host "Adding LLVM runtime: $($dll.FullName)"
+              Copy-Item $dll.FullName "artifact-windows\$name" -Force
+            }
+          }
+
+          if (!(Test-Path 'artifact-windows\libc++.dll')) {
+            throw "Matching libc++.dll was not found in LLVM-MinGW runtime"
+          }
+
+          Copy-Item stk-code/data artifact-windows/data -Recurse -Force
+          Copy-Item 'stk-assets-win\*' artifact-windows/data -Recurse -Force
+
+          if (!(Test-Path 'artifact-windows\data\supertuxkart.git')) {
+            throw "STK data version marker missing"
+          }
+          if (!(Test-Path 'artifact-windows\data\tracks')) {
+            throw "Track assets missing"
+          }
+          if (!(Test-Path 'artifact-windows\data\karts')) {
+            throw "Kart assets missing"
+          }
+
+          @"
+          STK Rocket Soccer - Windows x64 portable build
+
+          Run: supertuxkart.exe
+          Keep the EXE, DLL files and data folder together.
+          This build includes the Rocket Soccer C++ modifications and the matching LLVM runtime used by STK's dependency DLLs.
+          "@ | Set-Content artifact-windows/README-RUN.txt
+
+          Write-Host "Portable package top-level files:"
+          Get-ChildItem artifact-windows | Select-Object Name, Length
+
+      - name: Validate Windows runtime dependencies
+        shell: pwsh
+        run: |
+          foreach ($name in @('supertuxkart.exe','OpenAL32.dll','libastcenc.dll','libc++.dll')) {
+            if (!(Test-Path "artifact-windows\$name")) { throw "$name missing from portable package" }
+          }
+          Write-Host "OpenAL dependencies:"
+          dumpbin /DEPENDENTS artifact-windows/OpenAL32.dll
+          Write-Host "libastcenc dependencies:"
+          dumpbin /DEPENDENTS artifact-windows/libastcenc.dll
+
+      - name: Upload Windows portable build
         uses: actions/upload-artifact@v7
         with:
-          name: STK-Rocket-Soccer-Windows-x64
+          name: STK-Rocket-Soccer-Windows-x64-Portable
           path: artifact-windows/
           if-no-files-found: error
+          compression-level: 6
 
   android-arm64:
+    if: ${{ github.event_name != 'push' || !contains(github.event.head_commit.message, '[windows-only]') }}
     name: Android ARM64 APK
     runs-on: ubuntu-24.04
     steps:
