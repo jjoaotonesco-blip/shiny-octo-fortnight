@@ -1,0 +1,79 @@
+name: Build STK Rocket Soccer Windows Hotfix
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    name: Windows x64 EXE
+    runs-on: windows-2022
+    steps:
+      - name: Checkout builder repo
+        uses: actions/checkout@v6
+
+      - name: Decode mod bundle
+        shell: pwsh
+        run: |
+          $b64 = Get-Content mod/stk_rocket_soccer_mod.zip.b64 -Raw
+          [IO.File]::WriteAllBytes("stk_rocket_soccer_mod.zip", [Convert]::FromBase64String($b64))
+          Expand-Archive stk_rocket_soccer_mod.zip -DestinationPath mod-unpacked -Force
+
+      - name: Clone pinned SuperTuxKart
+        shell: bash
+        run: |
+          git clone https://github.com/supertuxkart/stk-code.git
+          cd stk-code
+          git checkout c6b127792e8ecdf82c28fdd9c8023cffb7084dc0
+
+      - name: Apply Rocket Soccer patch and Windows include fix
+        shell: pwsh
+        run: |
+          python mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code --check
+          python mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code
+          $path = "stk-code/src/modes/soccer_world.cpp"
+          $text = Get-Content $path -Raw
+          if ($text -notmatch '#include <ISceneManager.h>') {
+            $text = $text.Replace("#include <IMeshSceneNode.h>", "#include <IMeshSceneNode.h>`r`n#include <ISceneManager.h>")
+            Set-Content $path $text -NoNewline
+          }
+          Select-String -Path $path -Pattern 'ISceneManager.h'
+
+      - name: Download Windows dependencies
+        shell: bash
+        working-directory: stk-code
+        run: |
+          curl -L --fail -o dependencies-win-x86_64.zip https://github.com/supertuxkart/dependencies/releases/download/preview/dependencies-win-x86_64.zip
+          unzip -q dependencies-win-x86_64.zip
+
+      - name: Configure MSVC x64
+        shell: pwsh
+        working-directory: stk-code
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          cd build
+          cmake .. -G "Visual Studio 17 2022" -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=x86_64 -A x64 -DCHECK_ASSETS=OFF
+
+      - name: Build EXE
+        shell: pwsh
+        working-directory: stk-code/build
+        run: cmake --build . --config Release --target supertuxkart --parallel 4
+
+      - name: Collect Windows build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifact-windows | Out-Null
+          Get-ChildItem stk-code/build -Recurse -Filter supertuxkart.exe | ForEach-Object { Copy-Item $_.FullName artifact-windows/supertuxkart.exe -Force }
+          Get-ChildItem stk-code/build -Recurse -Filter *.dll | ForEach-Object { Copy-Item $_.FullName artifact-windows/ -Force }
+          if (!(Test-Path artifact-windows/supertuxkart.exe)) { throw "supertuxkart.exe not found" }
+
+      - name: Upload Windows EXE
+        uses: actions/upload-artifact@v7
+        with:
+          name: STK-Rocket-Soccer-Windows-x64
+          path: artifact-windows/
+          if-no-files-found: error
