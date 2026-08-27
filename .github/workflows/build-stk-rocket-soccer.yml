@@ -35,6 +35,12 @@ jobs:
         run: |
           python mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code --check
           python mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code
+          $path = "stk-code/src/modes/soccer_world.cpp"
+          $text = Get-Content $path -Raw
+          if ($text -notmatch '#include <ISceneManager.h>') {
+            $text = $text.Replace('#include <IMeshSceneNode.h>', "#include <IMeshSceneNode.h>`n#include <ISceneManager.h>")
+            Set-Content -Path $path -Value $text -NoNewline
+          }
 
       - name: Download Windows dependencies
         shell: bash
@@ -93,6 +99,14 @@ jobs:
         run: |
           python3 mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code --check
           python3 mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('stk-code/src/modes/soccer_world.cpp')
+          s = p.read_text()
+          if '#include <ISceneManager.h>' not in s:
+              s = s.replace('#include <IMeshSceneNode.h>', '#include <IMeshSceneNode.h>\n#include <ISceneManager.h>')
+              p.write_text(s)
+          PY
 
       - name: Install Android build dependencies
         run: |
@@ -154,9 +168,17 @@ jobs:
         run: ./make.sh -j4
 
       - name: Collect APK
+        shell: bash
         run: |
           mkdir -p artifact-android
-          cp stk-code/android/build/outputs/apk/android-debug.apk artifact-android/STK-Rocket-Soccer-arm64-debug.apk
+          APK="$(find stk-code/android/build/outputs/apk -type f -name '*.apk' | head -n 1)"
+          if [ -z "$APK" ]; then
+            echo "No APK found. Available output files:"
+            find stk-code/android/build/outputs -maxdepth 5 -type f -print || true
+            exit 1
+          fi
+          echo "Found APK: $APK"
+          cp "$APK" artifact-android/STK-Rocket-Soccer-arm64-debug.apk
           test -f artifact-android/STK-Rocket-Soccer-arm64-debug.apk
 
       - name: Upload Android APK
