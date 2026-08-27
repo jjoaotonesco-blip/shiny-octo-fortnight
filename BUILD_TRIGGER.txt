@@ -1,0 +1,2 @@
+Trigger STK Rocket Soccer Windows + Android build.
+Pinned STK commit: c6b127792e8ecdf82c28fdd9c8023cffb7084dc0
