@@ -20,9 +20,12 @@ jobs:
       - name: Checkout builder repo
         uses: actions/checkout@v6
 
-      - name: Decode mod bundle
+      - name: Decode known-good mod bundle
         run: |
-          base64 -d mod/stk_rocket_soccer_mod.zip.b64 > stk_rocket_soccer_mod.zip
+          curl -L --fail -o stk_rocket_soccer_mod.zip.b64 \
+            https://raw.githubusercontent.com/jjoaotonesco-blip/shiny-octo-fortnight/daed57f22ad212546525c9e40807c9a54effb9f0/mod/stk_rocket_soccer_mod.zip.b64
+          base64 -d stk_rocket_soccer_mod.zip.b64 > stk_rocket_soccer_mod.zip
+          unzip -t stk_rocket_soccer_mod.zip
           unzip -q stk_rocket_soccer_mod.zip -d mod-unpacked
 
       - name: Clone pinned SuperTuxKart
