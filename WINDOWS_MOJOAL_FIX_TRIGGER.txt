@@ -1,1 +1,1 @@
-Trigger Windows Rocket Soccer GameplayFix build v2 using known-good base mod.
+Trigger Windows Rocket Soccer GameplayFix build v3 with robust camera/input patch.
