@@ -1,1 +1,1 @@
-Trigger Windows Rocket Soccer GameplayFix build v4 with structural physics tuning.
+Trigger Windows Rocket Soccer GameplayFix build v5 with full aerial-control block replacement.
