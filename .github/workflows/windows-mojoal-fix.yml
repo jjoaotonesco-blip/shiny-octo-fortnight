@@ -4,6 +4,9 @@ on:
   push:
     paths:
       - 'WINDOWS_MOJOAL_FIX_TRIGGER.txt'
+  pull_request:
+    paths:
+      - 'WINDOWS_MOJOAL_FIX_TRIGGER.txt'
   workflow_dispatch:
 
 permissions:
