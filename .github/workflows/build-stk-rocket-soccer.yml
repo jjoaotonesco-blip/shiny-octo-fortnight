@@ -238,18 +238,16 @@ jobs:
         run: |
           mkdir -p artifact-android
           echo "APK candidates produced by the build:"
-          find stk-code -type f -name '*.apk' -print || true
-          APK="$(find stk-code -type f -name '*.apk' | grep -Ei 'debug.*\.apk$' | head -n 1 || true)"
+          find "$GITHUB_WORKSPACE" -type f -name '*.apk' -print || true
+          APK="$(find "$GITHUB_WORKSPACE" -type f -name '*.apk' -print | head -n 1)"
           if [ -z "$APK" ]; then
-            APK="$(find stk-code -type f -name '*.apk' | head -n 1)"
-          fi
-          if [ -z "$APK" ]; then
-            echo "No APK found anywhere under stk-code"
+            echo "No APK found anywhere in workspace"
+            find stk-code/android -maxdepth 10 -type f -print | tail -n 1000 || true
             exit 1
           fi
           echo "Found APK: $APK"
           cp "$APK" artifact-android/STK-Rocket-Soccer-arm64-debug.apk
-          test -f artifact-android/STK-Rocket-Soccer-arm64-debug.apk
+          test -s artifact-android/STK-Rocket-Soccer-arm64-debug.apk
           unzip -t artifact-android/STK-Rocket-Soccer-arm64-debug.apk
 
       - name: Upload Android APK
