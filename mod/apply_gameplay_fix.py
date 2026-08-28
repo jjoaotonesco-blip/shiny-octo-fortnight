@@ -68,8 +68,6 @@ new_toggle = '''    // Default Xbox Y is PA_RESCUE. In soccer it toggles persist
 
 '''
 
-# Replace the soccer camera toggle block regardless of the exact comment text.
-# It sits immediately before the stock Pause race handling in the patched file.
 patterns = [
     re.compile(
         r'    // In soccer,.*?(?=    // Pause race doesn\'t need to be sent to server)',
@@ -87,14 +85,12 @@ for pat in patterns:
     if match:
         break
 if not match:
-    # Give CI useful diagnostics on future source changes.
     pos = s.find('PA_RESCUE')
     excerpt = s[max(0, pos - 700):pos + 1400] if pos >= 0 else 'PA_RESCUE not found'
     print(excerpt)
     raise RuntimeError('local_player_controller.cpp: could not locate soccer Ball Cam toggle block')
 s = s[:match.start()] + new_toggle + s[match.end():]
 
-# Replace only the camera mode logic inside LocalPlayerController::update.
 start = s.find('        const bool rocket_soccer = dynamic_cast<SoccerWorld*>(World::getWorld()) != NULL;')
 end = s.find('        if (m_sky_particles_emitter)', start)
 if start < 0 or end < 0:
@@ -120,8 +116,6 @@ s = s[:start] + new_guard + s[end:]
 cpp.write_text(s, encoding='utf-8')
 print('GAMEPLAY FIX', cpp)
 
-# -----------------------------------------------------------------------------
-# Ball Cam positioning: closer to kart and anchored behind the kart orientation.
 cam = root / 'src/graphics/camera/camera_normal.cpp'
 s = cam.read_text(encoding='utf-8')
 start = s.find('                // Camera stays behind the kart relative to the ball')
@@ -149,28 +143,39 @@ s = s[:start] + new_camera + s[end:]
 cam.write_text(s, encoding='utf-8')
 print('GAMEPLAY FIX', cam)
 
-# -----------------------------------------------------------------------------
-# Jump / aerial / boost tuning.
 soccer = root / 'src/modes/soccer_world.cpp'
 s = soccer.read_text(encoding='utf-8')
-physics_subs = [
+for pattern, replacement, label in [
     (r'body->applyCentralImpulse\(up \* \(mass \* [0-9.]+f\)\);',
      'body->applyCentralImpulse(up * (mass * 10.8f));', 'higher first jump'),
     (r'body->applyCentralImpulse\(dir \* \(mass \* [0-9.]+f\)\);',
      'body->applyCentralImpulse(dir * (mass * 9.6f));', 'stronger second jump'),
-    (r'up \* \(-steer \* [0-9.]+f\) \+ right \* \(pitch \* [0-9.]+f\) \+',
-     'up * (-steer * 11.5f) + right * (pitch * 26.0f) +', 'stronger aerial pitch/yaw'),
-    (r'forward \* \(-roll \* [0-9.]+f\)\) \* mass\);',
-     'forward * (-roll * 24.0f)) * mass);', 'stronger air roll'),
     (r'if \(speed < [0-9.]+f\)',
      'if (speed < 50.0f)', 'higher boost speed gate'),
     (r'const float accel = grounded \? [0-9.]+f : [0-9.]+f;',
      'const float accel = grounded ? 24.0f : 45.0f;', 'stronger aerial boost'),
-]
-for pattern, replacement, label in physics_subs:
+]:
     s, n = re.subn(pattern, replacement, s, count=1)
     if n != 1:
         raise RuntimeError(f'soccer_world.cpp {label}: expected 1 structural match, got {n}')
+
+air_marker = s.find('// Air steering:')
+if air_marker < 0:
+    raise RuntimeError('soccer_world.cpp: Air steering marker not found')
+air_start = s.find('            const float steer = controls.getSteer();', air_marker)
+air_end = s.find('            if (body->getAngularVelocity().length() > 5.5f)', air_start)
+if air_start < 0 or air_end < 0:
+    raise RuntimeError('soccer_world.cpp: aerial control block boundaries not found')
+air_block = '''            const float steer = controls.getSteer();
+            const float pitch = controls.getAccel() - (controls.getBrake() ? 1.0f : 0.0f);
+            const float roll = controls.getSkidControl() == KartControl::SC_NONE ? 0.0f : steer;
+            // Xbox left stick back -> nose UP; forward -> nose DOWN.
+            // X (drift) + left/right adds air roll, Rocket-League style.
+            body->applyTorque((up * (-steer * 11.5f) + right * (pitch * 26.0f) +
+                               forward * (-roll * 24.0f)) * mass);
+'''
+s = s[:air_start] + air_block + s[air_end:]
+
 soccer.write_text(s, encoding='utf-8')
 print('GAMEPLAY FIX', soccer)
 
