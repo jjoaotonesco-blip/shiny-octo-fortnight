@@ -1,1 +1,1 @@
-Trigger monitored Windows Rocket Soccer MojoAL audio fix build - PR validation.
+Trigger Windows Rocket Soccer GameplayFix build: Xbox Y persistent Ball Cam, higher jump, aerial pitch and stronger air boost.
