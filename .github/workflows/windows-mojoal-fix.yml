@@ -1,4 +1,4 @@
-name: Windows Rocket Soccer Audio Fix
+name: Windows Rocket Soccer Gameplay Fix
 
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   build:
-    name: Windows x64 EXE without OpenAL32 DLL
+    name: Windows x64 Rocket Soccer GameplayFix
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout builder repo
@@ -35,6 +35,7 @@ jobs:
         run: |
           python3 mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code --check
           python3 mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code
+          python3 mod/apply_gameplay_fix.py stk-code
           python3 - <<'PY'
           from pathlib import Path
           p = Path('stk-code/src/modes/soccer_world.cpp')
@@ -43,6 +44,9 @@ jobs:
               s = s.replace('#include <IMeshSceneNode.h>', '#include <IMeshSceneNode.h>\n#include <ISceneManager.h>')
               p.write_text(s)
           PY
+          grep -n 'm_soccer_ball_cam_button_pressed' stk-code/src/karts/controller/local_player_controller.cpp
+          grep -n 'mass \* 10.8f' stk-code/src/modes/soccer_world.cpp
+          grep -n 'grounded ? 24.0f : 45.0f' stk-code/src/modes/soccer_world.cpp
 
       - name: Download STK Windows dependencies
         working-directory: stk-code
@@ -99,7 +103,7 @@ jobs:
         working-directory: stk-code/build
         run: make -j4
 
-      - name: Validate OpenAL32 is not imported
+      - name: Validate EXE and audio imports
         shell: bash
         run: |
           EXE=stk-code/build/bin/supertuxkart.exe
@@ -112,31 +116,43 @@ jobs:
             echo 'ERROR: supertuxkart.exe still imports OpenAL32.dll'
             exit 1
           fi
-          echo 'PASS: OpenAL32.dll is not imported by supertuxkart.exe'
           if grep -q '_ZNSt3__17codecvt' imports.txt; then
             echo 'ERROR: bad libc++ codecvt symbol appears in EXE import table'
             exit 1
           fi
+          echo 'PASS: EXE built with static MojoAL and gameplay patch'
 
-      - name: Create small replacement package
+      - name: Create replacement package
         run: |
-          mkdir -p STK-Rocket-Soccer-Windows-AudioFix
-          cp stk-code/build/bin/supertuxkart.exe STK-Rocket-Soccer-Windows-AudioFix/
-          cp imports.txt STK-Rocket-Soccer-Windows-AudioFix/imports.txt
-          cat > STK-Rocket-Soccer-Windows-AudioFix/README.txt <<'EOF'
-          Rocket Soccer Windows audio fix
+          mkdir -p STK-Rocket-Soccer-Windows-GameplayFix
+          cp stk-code/build/bin/supertuxkart.exe STK-Rocket-Soccer-Windows-GameplayFix/
+          cp imports.txt STK-Rocket-Soccer-Windows-GameplayFix/imports.txt
+          cat > STK-Rocket-Soccer-Windows-GameplayFix/README.txt <<'EOF'
+          Rocket Soccer Windows GameplayFix
 
-          1. Replace stk-code/build-x86_64/bin/supertuxkart.exe in the previous MinGW package with this EXE.
-          2. Delete OpenAL32.dll from stk-code/build-x86_64/bin if it is present.
-          3. Start the game using run_game.bat.
+          Default Xbox controls in soccer:
+          A = jump / double jump / dodge
+          B = boost
+          X + left-stick = air roll assist
+          Y = persistent Ball Cam toggle
+          Left stick back in air = pitch nose upward
+          Left stick forward in air = pitch nose downward
 
-          This EXE uses SuperTuxKart's bundled MojoAL statically and was CI-checked to have no OpenAL32.dll import.
+          Gameplay tuning:
+          - Ball Cam closer to kart and anchored to kart orientation
+          - Ball Cam remains active until Y is pressed again
+          - Higher first/second jump
+          - Stronger aerial pitch/yaw/roll
+          - Stronger aerial boost for flight
+
+          Replace the previous supertuxkart.exe with this one.
+          Keep OpenAL32.dll deleted from the runtime folder.
           EOF
 
-      - name: Upload fixed EXE
+      - name: Upload GameplayFix EXE
         uses: actions/upload-artifact@v7
         with:
-          name: STK-Rocket-Soccer-Windows-AudioFix
-          path: STK-Rocket-Soccer-Windows-AudioFix/
+          name: STK-Rocket-Soccer-Windows-GameplayFix
+          path: STK-Rocket-Soccer-Windows-GameplayFix/
           if-no-files-found: error
           compression-level: 6
