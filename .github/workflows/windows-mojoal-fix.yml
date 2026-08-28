@@ -1,0 +1,139 @@
+name: Windows Rocket Soccer Audio Fix
+
+on:
+  push:
+    paths:
+      - 'WINDOWS_MOJOAL_FIX_TRIGGER.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Windows x64 EXE without OpenAL32 DLL
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout builder repo
+        uses: actions/checkout@v6
+
+      - name: Decode mod bundle
+        run: |
+          base64 -d mod/stk_rocket_soccer_mod.zip.b64 > stk_rocket_soccer_mod.zip
+          unzip -q stk_rocket_soccer_mod.zip -d mod-unpacked
+
+      - name: Clone pinned SuperTuxKart
+        run: |
+          git clone https://github.com/supertuxkart/stk-code.git
+          cd stk-code
+          git checkout c6b127792e8ecdf82c28fdd9c8023cffb7084dc0
+
+      - name: Apply Rocket Soccer patch
+        run: |
+          python3 mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code --check
+          python3 mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('stk-code/src/modes/soccer_world.cpp')
+          s = p.read_text()
+          if '#include <ISceneManager.h>' not in s:
+              s = s.replace('#include <IMeshSceneNode.h>', '#include <IMeshSceneNode.h>\n#include <ISceneManager.h>')
+              p.write_text(s)
+          PY
+
+      - name: Download STK Windows dependencies
+        working-directory: stk-code
+        run: |
+          curl -L --fail -o dependencies-win-x86_64.zip https://github.com/supertuxkart/dependencies/releases/download/preview/dependencies-win-x86_64.zip
+          unzip -q dependencies-win-x86_64.zip
+
+      - name: Install official MXE MinGW toolchain
+        run: |
+          sudo mkdir -p /data/mxe/usr
+          cd /data/mxe/usr
+          sudo curl -L --fail -o mxe_static_mingw.zip https://github.com/supertuxkart/dependencies/releases/download/preview/mxe_static_mingw.zip
+          sudo unzip -q mxe_static_mingw.zip
+          sudo rm mxe_static_mingw.zip
+          sudo apt-get update
+          sudo apt-get install -y libfl-dev
+
+      - name: Install ISPC
+        run: |
+          curl -L --fail -o ispc-cross.tar.xz https://github.com/supertuxkart/dependencies/releases/download/preview/ispc-cross-1.26.0.tar.xz
+          sudo tar -xJf ispc-cross.tar.xz -C /opt
+          test -x /opt/ispc/bin/ispc
+
+      - name: Create x86_64 MinGW CMake toolchain
+        working-directory: stk-code
+        run: |
+          cat > toolchain.cmake <<'EOF'
+          SET(CMAKE_SYSTEM_NAME Windows)
+          SET(CMAKE_C_COMPILER /data/mxe/usr/bin/x86_64-w64-mingw32.static.posix.seh-gcc)
+          SET(CMAKE_CXX_COMPILER /data/mxe/usr/bin/x86_64-w64-mingw32.static.posix.seh-g++)
+          SET(CMAKE_RC_COMPILER /data/mxe/usr/bin/x86_64-w64-mingw32.static.posix.seh-windres)
+          SET(CMAKE_FIND_ROOT_PATH ${PROJECT_SOURCE_DIR}/dependencies-win-x86_64 /data/mxe/usr/x86_64-w64-mingw32.static.posix.seh/ /data/mxe/usr/lib/gcc/x86_64-w64-mingw32.static.posix.seh/5.5.0/)
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ALWAYS)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+          set(ISPC_ARCH "x86-64")
+          EOF
+
+      - name: Configure with bundled static MojoAL
+        working-directory: stk-code
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE=../toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCHECK_ASSETS=OFF \
+            -DUSE_DIRECTX=ON \
+            -DUSE_MOJOAL=ON \
+            -DBC7_ISPC=ON \
+            -DCMAKE_ISPC_COMPILER=/opt/ispc/bin/ispc
+
+      - name: Build Windows EXE
+        working-directory: stk-code/build
+        run: make -j4
+
+      - name: Validate OpenAL32 is not imported
+        shell: bash
+        run: |
+          EXE=stk-code/build/bin/supertuxkart.exe
+          OBJDUMP=/data/mxe/usr/bin/x86_64-w64-mingw32.static.posix.seh-objdump
+          test -f "$EXE"
+          "$OBJDUMP" -p "$EXE" > imports.txt
+          echo '=== DLL imports ==='
+          grep -i 'DLL Name' imports.txt || true
+          if grep -qi 'OpenAL32\.dll' imports.txt; then
+            echo 'ERROR: supertuxkart.exe still imports OpenAL32.dll'
+            exit 1
+          fi
+          echo 'PASS: OpenAL32.dll is not imported by supertuxkart.exe'
+          if grep -q '_ZNSt3__17codecvt' imports.txt; then
+            echo 'ERROR: bad libc++ codecvt symbol appears in EXE import table'
+            exit 1
+          fi
+
+      - name: Create small replacement package
+        run: |
+          mkdir -p STK-Rocket-Soccer-Windows-AudioFix
+          cp stk-code/build/bin/supertuxkart.exe STK-Rocket-Soccer-Windows-AudioFix/
+          cp imports.txt STK-Rocket-Soccer-Windows-AudioFix/imports.txt
+          cat > STK-Rocket-Soccer-Windows-AudioFix/README.txt <<'EOF'
+          Rocket Soccer Windows audio fix
+
+          1. Replace stk-code/build-x86_64/bin/supertuxkart.exe in the previous MinGW package with this EXE.
+          2. Delete OpenAL32.dll from stk-code/build-x86_64/bin if it is present.
+          3. Start the game using run_game.bat.
+
+          This EXE uses SuperTuxKart's bundled MojoAL statically and was CI-checked to have no OpenAL32.dll import.
+          EOF
+
+      - name: Upload fixed EXE
+        uses: actions/upload-artifact@v7
+        with:
+          name: STK-Rocket-Soccer-Windows-AudioFix
+          path: STK-Rocket-Soccer-Windows-AudioFix/
+          if-no-files-found: error
+          compression-level: 6
