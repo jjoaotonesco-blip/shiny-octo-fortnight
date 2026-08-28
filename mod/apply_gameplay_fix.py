@@ -68,6 +68,8 @@ new_toggle = '''    // Default Xbox Y is PA_RESCUE. In soccer it toggles persist
 
 '''
 
+# Replace the soccer camera toggle block regardless of the exact comment text.
+# It sits immediately before the stock Pause race handling in the patched file.
 patterns = [
     re.compile(
         r'    // In soccer,.*?(?=    // Pause race doesn\'t need to be sent to server)',
@@ -85,12 +87,14 @@ for pat in patterns:
     if match:
         break
 if not match:
+    # Give CI useful diagnostics on future source changes.
     pos = s.find('PA_RESCUE')
     excerpt = s[max(0, pos - 700):pos + 1400] if pos >= 0 else 'PA_RESCUE not found'
     print(excerpt)
     raise RuntimeError('local_player_controller.cpp: could not locate soccer Ball Cam toggle block')
 s = s[:match.start()] + new_toggle + s[match.end():]
 
+# Replace only the camera mode logic inside LocalPlayerController::update.
 start = s.find('        const bool rocket_soccer = dynamic_cast<SoccerWorld*>(World::getWorld()) != NULL;')
 end = s.find('        if (m_sky_particles_emitter)', start)
 if start < 0 or end < 0:
@@ -116,6 +120,8 @@ s = s[:start] + new_guard + s[end:]
 cpp.write_text(s, encoding='utf-8')
 print('GAMEPLAY FIX', cpp)
 
+# -----------------------------------------------------------------------------
+# Ball Cam positioning: closer to kart and anchored behind the kart orientation.
 cam = root / 'src/graphics/camera/camera_normal.cpp'
 s = cam.read_text(encoding='utf-8')
 start = s.find('                // Camera stays behind the kart relative to the ball')
@@ -143,22 +149,28 @@ s = s[:start] + new_camera + s[end:]
 cam.write_text(s, encoding='utf-8')
 print('GAMEPLAY FIX', cam)
 
+# -----------------------------------------------------------------------------
+# Jump / aerial / boost tuning.
 soccer = root / 'src/modes/soccer_world.cpp'
 s = soccer.read_text(encoding='utf-8')
-for old, new, label in [
-    ('body->applyCentralImpulse(up * (mass * 8.2f));',
+physics_subs = [
+    (r'body->applyCentralImpulse\(up \* \(mass \* [0-9.]+f\)\);',
      'body->applyCentralImpulse(up * (mass * 10.8f));', 'higher first jump'),
-    ('body->applyCentralImpulse(dir * (mass * 8.6f));',
+    (r'body->applyCentralImpulse\(dir \* \(mass \* [0-9.]+f\)\);',
      'body->applyCentralImpulse(dir * (mass * 9.6f));', 'stronger second jump'),
-    ('up * (-steer * 9.5f) + right * (pitch * 18.0f) +',
+    (r'up \* \(-steer \* [0-9.]+f\) \+ right \* \(pitch \* [0-9.]+f\) \+',
      'up * (-steer * 11.5f) + right * (pitch * 26.0f) +', 'stronger aerial pitch/yaw'),
-    ('forward * (-roll * 20.0f)) * mass);',
+    (r'forward \* \(-roll \* [0-9.]+f\)\) \* mass\);',
      'forward * (-roll * 24.0f)) * mass);', 'stronger air roll'),
-    ('if (speed < 42.0f)', 'if (speed < 50.0f)', 'higher boost speed gate'),
-    ('const float accel = grounded ? 22.0f : 32.0f;',
+    (r'if \(speed < [0-9.]+f\)',
+     'if (speed < 50.0f)', 'higher boost speed gate'),
+    (r'const float accel = grounded \? [0-9.]+f : [0-9.]+f;',
      'const float accel = grounded ? 24.0f : 45.0f;', 'stronger aerial boost'),
-]:
-    s = must_replace(s, old, new, f'soccer_world.cpp {label}')
+]
+for pattern, replacement, label in physics_subs:
+    s, n = re.subn(pattern, replacement, s, count=1)
+    if n != 1:
+        raise RuntimeError(f'soccer_world.cpp {label}: expected 1 structural match, got {n}')
 soccer.write_text(s, encoding='utf-8')
 print('GAMEPLAY FIX', soccer)
 
