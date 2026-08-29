@@ -1,1 +1,1 @@
-Trigger Windows Rocket Soccer MojoAL audio fix build.
+Trigger Rocket Soccer Controls V2 build using 4 validated patch chunks and SHA-256 verification.

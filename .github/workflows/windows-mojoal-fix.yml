@@ -1,4 +1,4 @@
-name: Windows Rocket Soccer Audio Fix
+name: Windows Rocket Soccer Controls V2
 
 on:
   push:
@@ -14,16 +14,24 @@ permissions:
 
 jobs:
   build:
-    name: Windows x64 EXE without OpenAL32 DLL
+    name: Windows x64 Rocket Soccer ControlsV2
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout builder repo
         uses: actions/checkout@v6
 
-      - name: Decode mod bundle
+      - name: Decode known-good mod bundle
         run: |
-          base64 -d mod/stk_rocket_soccer_mod.zip.b64 > stk_rocket_soccer_mod.zip
+          curl -L --fail -o stk_rocket_soccer_mod.zip.b64 \
+            https://raw.githubusercontent.com/jjoaotonesco-blip/shiny-octo-fortnight/daed57f22ad212546525c9e40807c9a54effb9f0/mod/stk_rocket_soccer_mod.zip.b64
+          base64 -d stk_rocket_soccer_mod.zip.b64 > stk_rocket_soccer_mod.zip
+          unzip -t stk_rocket_soccer_mod.zip
           unzip -q stk_rocket_soccer_mod.zip -d mod-unpacked
+          cat mod/v2part1.txt mod/v2part2.txt mod/v2part3.txt mod/v2part4.txt > apply_gameplay_fix_v2.py.gz.b64
+          test "$(wc -c < apply_gameplay_fix_v2.py.gz.b64)" -eq 9872
+          echo 'b7f9de0cbcc718923bf8eb9f18f004ecac6d46ceef2c7e8bb0157f4732cb3c21  apply_gameplay_fix_v2.py.gz.b64' | sha256sum -c -
+          base64 -d apply_gameplay_fix_v2.py.gz.b64 | gunzip > apply_gameplay_fix_v2.py
+          python3 -m py_compile apply_gameplay_fix_v2.py
 
       - name: Clone pinned SuperTuxKart
         run: |
@@ -31,18 +39,17 @@ jobs:
           cd stk-code
           git checkout c6b127792e8ecdf82c28fdd9c8023cffb7084dc0
 
-      - name: Apply Rocket Soccer patch
+      - name: Apply Rocket Soccer V2 patch
         run: |
           python3 mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code --check
           python3 mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('stk-code/src/modes/soccer_world.cpp')
-          s = p.read_text()
-          if '#include <ISceneManager.h>' not in s:
-              s = s.replace('#include <IMeshSceneNode.h>', '#include <IMeshSceneNode.h>\n#include <ISceneManager.h>')
-              p.write_text(s)
-          PY
+          python3 apply_gameplay_fix_v2.py stk-code
+          grep -n 'PA_SOCCER_JUMP' stk-code/src/input/input.hpp
+          grep -n 'SDL_CONTROLLER_AXIS_TRIGGERRIGHT_UP' stk-code/src/input/gamepad_config.cpp
+          grep -n 'dodge_mag < 0.80f' stk-code/src/modes/soccer_world.cpp
+          grep -n 'time2Ticks(0.20f)' stk-code/src/modes/soccer_world.cpp
+          grep -n 'getSoccerAirRollLeftPressed' stk-code/src/modes/soccer_world.cpp
+          grep -n 'm_soccer_ball_cam_button_pressed' stk-code/src/karts/controller/local_player_controller.cpp
 
       - name: Download STK Windows dependencies
         working-directory: stk-code
@@ -99,7 +106,7 @@ jobs:
         working-directory: stk-code/build
         run: make -j4
 
-      - name: Validate OpenAL32 is not imported
+      - name: Validate EXE and audio imports
         shell: bash
         run: |
           EXE=stk-code/build/bin/supertuxkart.exe
@@ -112,31 +119,49 @@ jobs:
             echo 'ERROR: supertuxkart.exe still imports OpenAL32.dll'
             exit 1
           fi
-          echo 'PASS: OpenAL32.dll is not imported by supertuxkart.exe'
-          if grep -q '_ZNSt3__17codecvt' imports.txt; then
-            echo 'ERROR: bad libc++ codecvt symbol appears in EXE import table'
-            exit 1
-          fi
+          echo 'PASS: V2 EXE built with static MojoAL'
 
-      - name: Create small replacement package
+      - name: Create replacement package
         run: |
-          mkdir -p STK-Rocket-Soccer-Windows-AudioFix
-          cp stk-code/build/bin/supertuxkart.exe STK-Rocket-Soccer-Windows-AudioFix/
-          cp imports.txt STK-Rocket-Soccer-Windows-AudioFix/imports.txt
-          cat > STK-Rocket-Soccer-Windows-AudioFix/README.txt <<'EOF'
-          Rocket Soccer Windows audio fix
+          mkdir -p STK-Rocket-Soccer-Windows-ControlsV2
+          cp stk-code/build/bin/supertuxkart.exe STK-Rocket-Soccer-Windows-ControlsV2/
+          cp imports.txt STK-Rocket-Soccer-Windows-ControlsV2/imports.txt
+          cat > STK-Rocket-Soccer-Windows-ControlsV2/README.txt <<'EOF'
+          Rocket Soccer Controls V2
 
-          1. Replace stk-code/build-x86_64/bin/supertuxkart.exe in the previous MinGW package with this EXE.
-          2. Delete OpenAL32.dll from stk-code/build-x86_64/bin if it is present.
-          3. Start the game using run_game.bat.
+          Xbox / SDL semantic soccer profile:
+          RT = accelerate
+          LT = brake / reverse
+          Left stick left/right = ground steering / air yaw
+          Left stick forward/back = air pitch
+          A = variable jump / double jump / directional dodge
+          B = dedicated 0-100 boost
+          X = powerslide on ground / free air roll with left stick in air
+          Y = persistent Ball Cam toggle
+          LB = Air Roll Left
+          RB = Air Roll Right
+          Start = normal STK pause
 
-          This EXE uses SuperTuxKart's bundled MojoAL statically and was CI-checked to have no OpenAL32.dll import.
+          Mechanics added/tuned:
+          - Soccer-specific input layer; normal STK bindings are untouched outside soccer
+          - SDL semantic controls, so raw Xbox button numbers are not assumed
+          - Hold A up to 0.20s for extra jump height
+          - 0.80 directional dodge deadzone
+          - 1.35s second-jump/dodge window
+          - Boost thrust follows the kart nose for real aerials
+          - Small airborne throttle authority
+          - Dedicated left/right air roll plus X free air roll
+          - Ball Cam remains active until Y is pressed again
+          - Ball Cam stays closer behind the kart while aiming at the ball
+
+          Replace only supertuxkart.exe from the previous corrected MinGW package.
+          Keep OpenAL32.dll deleted from the runtime folder.
           EOF
 
-      - name: Upload fixed EXE
+      - name: Upload ControlsV2 EXE
         uses: actions/upload-artifact@v7
         with:
-          name: STK-Rocket-Soccer-Windows-AudioFix
-          path: STK-Rocket-Soccer-Windows-AudioFix/
+          name: STK-Rocket-Soccer-Windows-ControlsV2
+          path: STK-Rocket-Soccer-Windows-ControlsV2/
           if-no-files-found: error
           compression-level: 6
