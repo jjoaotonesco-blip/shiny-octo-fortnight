@@ -1,4 +1,4 @@
-name: Windows Rocket Soccer Gameplay Fix
+name: Windows Rocket Soccer Controls V2
 
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   build:
-    name: Windows x64 Rocket Soccer GameplayFix
+    name: Windows x64 Rocket Soccer ControlsV2
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout builder repo
@@ -27,6 +27,8 @@ jobs:
           base64 -d stk_rocket_soccer_mod.zip.b64 > stk_rocket_soccer_mod.zip
           unzip -t stk_rocket_soccer_mod.zip
           unzip -q stk_rocket_soccer_mod.zip -d mod-unpacked
+          base64 -d mod/apply_gameplay_fix_v2.py.gz.b64 | gunzip > apply_gameplay_fix_v2.py
+          python3 -m py_compile apply_gameplay_fix_v2.py
 
       - name: Clone pinned SuperTuxKart
         run: |
@@ -34,22 +36,17 @@ jobs:
           cd stk-code
           git checkout c6b127792e8ecdf82c28fdd9c8023cffb7084dc0
 
-      - name: Apply Rocket Soccer patch
+      - name: Apply Rocket Soccer V2 patch
         run: |
           python3 mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code --check
           python3 mod-unpacked/stk_rocket_soccer_mod/apply_rocket_soccer.py stk-code
-          python3 mod/apply_gameplay_fix.py stk-code
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('stk-code/src/modes/soccer_world.cpp')
-          s = p.read_text()
-          if '#include <ISceneManager.h>' not in s:
-              s = s.replace('#include <IMeshSceneNode.h>', '#include <IMeshSceneNode.h>\n#include <ISceneManager.h>')
-              p.write_text(s)
-          PY
+          python3 apply_gameplay_fix_v2.py stk-code
+          grep -n 'PA_SOCCER_JUMP' stk-code/src/input/input.hpp
+          grep -n 'SDL_CONTROLLER_AXIS_TRIGGERRIGHT_UP' stk-code/src/input/gamepad_config.cpp
+          grep -n 'dodge_mag < 0.80f' stk-code/src/modes/soccer_world.cpp
+          grep -n 'time2Ticks(0.20f)' stk-code/src/modes/soccer_world.cpp
+          grep -n 'getSoccerAirRollLeftPressed' stk-code/src/modes/soccer_world.cpp
           grep -n 'm_soccer_ball_cam_button_pressed' stk-code/src/karts/controller/local_player_controller.cpp
-          grep -n 'mass \* 10.8f' stk-code/src/modes/soccer_world.cpp
-          grep -n 'grounded ? 24.0f : 45.0f' stk-code/src/modes/soccer_world.cpp
 
       - name: Download STK Windows dependencies
         working-directory: stk-code
@@ -119,43 +116,49 @@ jobs:
             echo 'ERROR: supertuxkart.exe still imports OpenAL32.dll'
             exit 1
           fi
-          if grep -q '_ZNSt3__17codecvt' imports.txt; then
-            echo 'ERROR: bad libc++ codecvt symbol appears in EXE import table'
-            exit 1
-          fi
-          echo 'PASS: EXE built with static MojoAL and gameplay patch'
+          echo 'PASS: V2 EXE built with static MojoAL'
 
       - name: Create replacement package
         run: |
-          mkdir -p STK-Rocket-Soccer-Windows-GameplayFix
-          cp stk-code/build/bin/supertuxkart.exe STK-Rocket-Soccer-Windows-GameplayFix/
-          cp imports.txt STK-Rocket-Soccer-Windows-GameplayFix/imports.txt
-          cat > STK-Rocket-Soccer-Windows-GameplayFix/README.txt <<'EOF'
-          Rocket Soccer Windows GameplayFix
+          mkdir -p STK-Rocket-Soccer-Windows-ControlsV2
+          cp stk-code/build/bin/supertuxkart.exe STK-Rocket-Soccer-Windows-ControlsV2/
+          cp imports.txt STK-Rocket-Soccer-Windows-ControlsV2/imports.txt
+          cat > STK-Rocket-Soccer-Windows-ControlsV2/README.txt <<'EOF'
+          Rocket Soccer Controls V2
 
-          Default Xbox controls in soccer:
-          A = jump / double jump / dodge
-          B = boost
-          X + left-stick = air roll assist
+          Xbox / SDL semantic soccer profile:
+          RT = accelerate
+          LT = brake / reverse
+          Left stick left/right = ground steering / air yaw
+          Left stick forward/back = air pitch
+          A = variable jump / double jump / directional dodge
+          B = dedicated 0-100 boost
+          X = powerslide on ground / free air roll with left stick in air
           Y = persistent Ball Cam toggle
-          Left stick back in air = pitch nose upward
-          Left stick forward in air = pitch nose downward
+          LB = Air Roll Left
+          RB = Air Roll Right
+          Start = normal STK pause
 
-          Gameplay tuning:
-          - Ball Cam closer to kart and anchored to kart orientation
+          Mechanics added/tuned:
+          - Soccer-specific input layer; normal STK bindings are untouched outside soccer
+          - SDL semantic controls, so raw Xbox button numbers are not assumed
+          - Hold A up to 0.20s for extra jump height
+          - 0.80 directional dodge deadzone
+          - 1.35s second-jump/dodge window
+          - Boost thrust follows the kart nose for real aerials
+          - Small airborne throttle authority
+          - Dedicated left/right air roll plus X free air roll
           - Ball Cam remains active until Y is pressed again
-          - Higher first/second jump
-          - Stronger aerial pitch/yaw/roll
-          - Stronger aerial boost for flight
+          - Ball Cam stays closer behind the kart while aiming at the ball
 
-          Replace the previous supertuxkart.exe with this one.
+          Replace only supertuxkart.exe from the previous corrected MinGW package.
           Keep OpenAL32.dll deleted from the runtime folder.
           EOF
 
-      - name: Upload GameplayFix EXE
+      - name: Upload ControlsV2 EXE
         uses: actions/upload-artifact@v7
         with:
-          name: STK-Rocket-Soccer-Windows-GameplayFix
-          path: STK-Rocket-Soccer-Windows-GameplayFix/
+          name: STK-Rocket-Soccer-Windows-ControlsV2
+          path: STK-Rocket-Soccer-Windows-ControlsV2/
           if-no-files-found: error
           compression-level: 6
