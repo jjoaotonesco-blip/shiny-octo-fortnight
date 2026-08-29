@@ -27,7 +27,10 @@ jobs:
           base64 -d stk_rocket_soccer_mod.zip.b64 > stk_rocket_soccer_mod.zip
           unzip -t stk_rocket_soccer_mod.zip
           unzip -q stk_rocket_soccer_mod.zip -d mod-unpacked
-          base64 -d mod/apply_gameplay_fix_v2.py.gz.b64 | gunzip > apply_gameplay_fix_v2.py
+          cat mod/v2part1.txt mod/v2part2.txt mod/v2part3.txt mod/v2part4.txt > apply_gameplay_fix_v2.py.gz.b64
+          test "$(wc -c < apply_gameplay_fix_v2.py.gz.b64)" -eq 9872
+          echo 'b7f9de0cbcc718923bf8eb9f18f004ecac6d46ceef2c7e8bb0157f4732cb3c21  apply_gameplay_fix_v2.py.gz.b64' | sha256sum -c -
+          base64 -d apply_gameplay_fix_v2.py.gz.b64 | gunzip > apply_gameplay_fix_v2.py
           python3 -m py_compile apply_gameplay_fix_v2.py
 
       - name: Clone pinned SuperTuxKart
