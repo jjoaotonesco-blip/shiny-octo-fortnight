@@ -1,1 +1,1 @@
-Trigger Rocket Soccer Controls V2 semantic input, jump-hold, dodge-deadzone and aerial mechanics build.
+Trigger Rocket Soccer Controls V2 build after removing goto-crossing lambda in SDL soccer bindings.
