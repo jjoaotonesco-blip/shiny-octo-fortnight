@@ -1,1 +1,1 @@
-Trigger Rocket Soccer Controls V2 build after removing goto-crossing lambda in SDL soccer bindings.
+Trigger Rocket Soccer Controls V2 build using 4 validated patch chunks and SHA-256 verification.
