@@ -1,1 +1,1 @@
-Trigger Windows Rocket Soccer GameplayFix build v5 with full aerial-control block replacement.
+Trigger Rocket Soccer Controls V2 semantic input, jump-hold, dodge-deadzone and aerial mechanics build.
